@@ -1,0 +1,448 @@
+---
+title: |
+    Open Neuro Interface Specification \
+    Version 0.3
+author: Jonathan P. Newman, Wilson Lab, MIT
+institution:
+date: \today{}
+geometry: margin=2cm
+header-includes:
+    - \usepackage{setspace}
+    - \usepackage{lineno}
+    - \linenumbers
+colorlinks: true
+toc: true
+toc-depth: 2
+secnumdepth: 2
+abstract: |
+    This document specifies requirements for implementing an Open Neuro
+    Interface (ONI) acquisition system in hardware and software. This
+    specification entails two basic elements: (1) Communication protocols
+    between acquisition firmware and host software and (2) an application
+    programming interface (API) for utilizing this communication protocol. This
+    document is incomplete and we gratefully welcome criticisms and amendments.
+---
+
+\newpage
+# Intentions and capabilities
+- Potential for low latency round trip times (sub millisecond)
+- Potential for high-bandwidth, bidirectional communication (> 1000 neural data
+  channels)
+- Acquisition and control of arbitrary of hardware components using a single
+  communication medium
+    - Support generic mixes of hardware elements from multiple, asynchronous
+      pieces of hardware
+    - Generic hardware configuration
+    - Generic data input streams
+    - Generic data output streams
+- Support multiple acquisition systems on one computer
+- Cross platform
+- Aimed at the creation of firmware, APIs, language bindings and
+  application-specific libraries
+
+\newpage
+# FPGA/Host PC communication {#comm-protocol}
+Communication between the acquisition board firmware and API shall occur
+over at least four communication channels:
+
+1. Signal: Read-only, short-message, asynchronous hardware events. Only one
+   signal channel is permitted.
+2. Configuration: Bidirectional, register-based, synchronous configuration
+   setting and getting. Only one configuration channel is permitted.
+3. Input: Read-only, asynchronous, high-bandwidth firmware to host streaming.
+   More than one input channel is permitted.
+4. Output: Write-only, asynchronous, high-bandwidth host to firmware streaming.
+   More than one output channel is permitted.
+
+Required characteristics of these channels are described in the following
+paragraphs.
+
+## Signal channel  {#sig-chan}
+
+- __Word size__ : 8 bits
+- __R/W Timing__ : Asynchronous
+- __Read Only__
+
+The _signal_ channel provides a way for the FPGA firmware to inform host of
+configuration results, which may be provided with a significant delay.
+Additionally, it allows the host to read the device map supported by the FPGA
+firmware. The behavior of the signal channel is equivalent to a read-only,
+blocking UNIX named pipe. Signal data is framed into packets using Consistent
+Overhead Byte Stuffing
+([COBS](https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing)).
+Within this scheme, packets are delimited using 0's and always have the
+following format:
+
+```
+... | PACKET_FLAG data | ...
+```
+
+where `PACKET_FLAG` is 32-bit unsigned integer with a single unique bit
+setting, ` | ` represents a packet delimiter, and `...` represents other
+packets. This stream can be read and ignored  until a desired packet is
+received. Reading this stream shall block if no data is available, which allows
+asynchronous configuration acknowledgment. Valid `PACKET_FLAG`s are:
+
+``` {.c}
+enum signal {
+    NULLSIG      = (1u << 0), // Null signal, ignored by host
+    CONFIGWACK   = (1u << 1), // Configuration write-acknowledgment
+    CONFIGWNACK  = (1u << 2), // Configuration no-write-acknowledgment
+    CONFIGRACK   = (1u << 3), // Configuration read-acknowledgment
+    CONFIGRNACK  = (1u << 4), // Configuration no-read-acknowledgment
+    DEVICEMAPACK = (1u << 5), // Device map start acknowledgment
+    DEVICEINST   = (1u << 6), // Device map instance
+};
+```
+
+Following a hardware reset, the signal channel is used to provide the device
+map to the host using the following packet sequence:
+
+```
+... | DEVICEMAPACK, uint32_t num_devices | DEVICEINST device dev_0
+    | DEVICEINST device dev_1 | ... | DEVICEINST device dev_n | ...
+```
+
+Following a device register read or write (see [configuration
+channel](#conf-chan)), ACK or NACK signals are pushed onto the signal stream by
+the firmware. For instance, on a successful register read:
+
+```
+... | CONFIGRACK, uint32_t register value | ...
+```
+
+## Configuration channel {#conf-chan}
+
+- __Word size__ : 32 bits
+- __R/W Timing__ : Synchronous
+- __Read & Write__
+
+The _configuration_ channel supports seeking to, reading, and writing a set of
+configuration registers. Its behavior is equivalent to that of a normal UNIX
+file. There are two classes of registers handled by the configuration channel:
+the first set of registers encapsulates a generic device register programming
+interface. The remaining registers are for global context control and
+configuration and provide access to acquisition parameters and state control.
+`SEEK` locations of each configuration register, relative to the start of the
+stream, should be hard-coded into the API implementation file and used in the
+background to manipulate register state.
+
+### Device register programming interface
+The device programming interface is composed of the following configuration
+channel registers:
+
+- `uint32_t config_device_idx`: Device index register. Specify a device
+  endpoint as enumerated in the device map by the firmware (e.g. an Intan chip,
+  or a IMU chip) and to which communication will be directed using
+  `config_reg_addr` and `config_reg_value`, as described below.
+
+- `uint32_t config_reg_addr`: The register address of configuration to be
+  written
+
+- `uint32_t config_reg_value`: configuration value to be written to or read
+  from and that corresponds to `config_reg_addr` on device `config_device_id`
+
+- `uint32_t config_rw`: A flag indicating if a read or write should be
+  performed.  0 indicates read operation. A value > 0 indicates write
+  operation.
+
+- `uint32_t config_trig`: Set > 0 to trigger either register read or write
+  operation depending on the state of `config_rw`. If `config_rw` is 0, a read
+  is performed. In this case `config_reg_value` is updated with value stored at
+  `config_reg_addr` on device at `config_device_id`. If `config_rw` is 1,
+  `config_reg_value` is written to register at `config_reg_addr` on device
+  `config_device_id`. The `config_trig` register is always be set low by the
+  firmware following transmission even if it is not successful or does not make
+  sense given the address register values.
+
+Appropriate values of `config_reg_addr` and `config_reg_value` are
+determined by:
+
+- Looking at a device's data sheet if the device is an integrated circuit
+- Examining the ONI-compliant API's documentation which contains off register
+  addresses and descriptions for devices officially supported by this project.
+
+When a host requests a device register _read_, the following following actions
+take place:
+
+1. The value of `config_trig` is checked.
+    - If it is 0, the function call proceeds.
+    - Else, the function call returns with an error specifying a retrigger.
+1. `dev_idx` is copied to the `config_device_idx` register on the host FPGA.
+1. `addr` is copied to the `config_reg_addr` register on the host FPGA.
+1. The `config_rw` register on the host FPGA is set to 0x00.
+1. The `config_trig` register on the host FPGA is set to 0x01,
+triggering configuration transmission by the firmware.
+1. (Firmware) A configuration read is performed by the firmware.
+1. (Firmware) `config_trig` is set to 0x00 by the firmware.
+1. (Firmware) `CONFIGRACK` is pushed onto the signal stream by the
+firmware.
+1. The signal stream is pumped until either `CONFIGRACK` or `CONFIGRNACK` is
+   received indicating that the host FPGA has either:
+    - Completed reading the specified device register and copied its value to
+      the `config_reg_value` register.
+    - Failed to read the register in which case the value of `config_reg_value`
+      contains invalid data.
+
+When a host requests a device register _write_, the following following actions
+take place:
+
+1. The value of `config_trig` is checked.
+    - If it is 0, the function call proceeds.
+    - Else, the function call returns with an error specifying a retrigger.
+1. `dev_idx` is copied to the `config_device_id` register on the host FPGA.
+1. `addr` is copied to the `config_reg_addr` register on the host FPGA.
+1. `value` is copied to the `config_reg_value` register on the host FPGA.
+1. The `config_rw` register on the host FPGA is set to 0x01.
+1. The `config_trig` register on the host FPGA is set to 0x01, triggering
+configuration transmission by the firmware.
+1. (Firmware) A configuration write is performed by the firmware.
+1. (Firmware) `config_trig` is set to 0x00 by the firmware.
+1. (Firmware) `CONFIGWACK` is pushed onto the signal stream by the
+firmware.
+1. The signal stream is pumped until either `CONFIGWACK` or `CONFIGWNACK` is
+   received indicating that the host FPGA has either:
+    - Successfully completed writing the specified device register
+    - Failed to write the register
+
+Following successful or unsuccessful device register read or write, the
+appropriate ACK or NACK packets _must_ be passed to the [signal
+channel](#sig-chan). If they are not, the register read and write calls will
+block indefinitely.
+
+### Global acquisition registers
+The following global acquisition registers provide information about, and
+control over, the entire acquisition system:
+
+- `uint32_t running`: set to > 0 to run the system clock and produce data. Set
+  to 0 to stop the system clock and therefore stop data flow. Results in no
+  other configuration changes.
+
+- `uint32_t reset`: set to > 0 to trigger a hardware reset and send a fresh
+  device map to the host and reset hardware to its default state. Set to 0 by
+  host firmware upon entering the reset state.
+
+- `uint32_t sys_clock_hz`: A read-only register specifying the master (clock
+  domain 0) hardware clock frequency in Hz. The clock counter in the read
+  [frame](#frame) header is incremented at this frequency.
+
+## Data read channel {#data-rd-chan}
+
+- __Word size__ : 32 bits
+- __R/W Timing__ : Asynchronous
+- __Read Only__
+
+The _data read_ channel provides high bandwidth communication from the FPGA
+firmware to the host computer using direct memory access (DMA). From the host's
+perspective, its behavior is equivalent to a read-only, blocking UNIX named
+pipe with the exception that data can only be read on 32-bit, instead of 8-bit,
+boundaries. The data input channel communicates with the host using
+[frames](#frame) with a read-header ("read-frames"). Read-frames are pushed
+into the data input channel at a rate dictated by the FPGA firmware. It is
+incumbent on the host to read this stream fast enough to prevent buffer
+overflow. At the time of this writing, a typical implementation will allocate
+an input buffer that occupies a 512 MB segment of kernal RAM. Increased
+bandwidth demands will necessitate the creation of a user-space buffer. This
+change shall have no effect on the API.
+
+## Data write channel {#data-wr-chan}
+
+- __Word size__ : 32 bits
+- __R/W Timing__ : Asynchronous
+- __Write Only__
+
+The _data write_ channel provides high bandwidth communication from the host
+computer to the FPGA firmware using DMA via calls. From the host's perspective,
+its behavior is equivalent to a write-only, blocking UNIX named pipe with the
+exception that data can only be written on 32-bit, instead of 8-bit,
+boundaries. Its performance characteristics are largely identical to the data
+input channel. However, the format of data  written to the this channel is
+different. Instead of writing frames with header information describing the
+frame contents, data should be written to a single device at a time. This
+action is very similar to a UNIX `write` syscall with some additional
+arguments: namely the file descriptor is replaced by a context and device
+index:
+
+```
+// UNIX write
+size_t write(int fd, const void *buf, size_t count);
+
+// Possible ONI write
+size_t oni_write(const oni_ctx ctx, size_t dev_idx, const void *data, size_t data_sz)
+```
+
+\newpage
+
+\newpage
+# Device Driver Specification  {#driver-protocol}
+TODO
+
+\newpage
+# Required API Types and Behavior {#api-spec}
+In the following sections we define required API datatypes and how they are
+used by the API to communicate with hardware. An implementation of this API,
+[liboepcie](#api-imp), follows.
+
+## Context
+A _context_ shall hold all state required to manage single [FPGA/Host
+communication system](#comm-protocol). This includes a device map (simple list
+of _devices_) being acquired from, data buffering elements, etc. API calls will
+typically take a context handle as the first argument and use it to reference
+required state information to enable communication and/or to mutate the context
+to reflect some function side effect (e.g. add device map information):
+
+```
+int api_function(context *ctx, ...);
+```
+
+## Device
+A _device_ is defined as configurable piece of hardware with its own register
+address space (e.g. an integrated circuit) or something programmed within the
+firmware to emulate this (e.g. an electrical stimulation sub-circuit made to
+behave like a Master-8). Host interaction with a device is facilitated using a
+device description, which holds the following elements:
+
+- `device_id`: Device ID number
+- `slot`: The index of the physical interface that this device uses for host
+  communication
+- `clock_dom`: Device clock domain (0 is master, 1 or greater are slaves
+  synchronized to master)
+- `clock_hz`: Clock rate in Hz of clock governing `clock_dom`
+- `read_active`: Device will use the data input channel if read_size > 0 and it
+  has valid data.
+- `read_size`: Device data read size per frame in bytes
+- `num_reads`: Number of frames that must be read to construct a full
+  sample (e.g., for row reads from camera)
+- `write_size`: Device data write size per frame in bytes
+- `num_writes`: Number of frames that must be written to construct a full
+  output sample (e.g., for row writes for a display)
+
+An array of structures holding each of these entries forms a _device map_. A
+_context_ is responsible for managing a single device map, which keep track of
+where to send and receive streaming data and configuration information during
+API calls. A detailed description of each of each value comprising a device
+instance is as follows:
+
+1. `device_id` [RO]: Device identification number which is globally
+   enumerated for the entire project
+    - There shall be a single enumeration for a ONI library implementation that
+      uniquely identifies all possible devices that are controlled across _context_
+      configurations.  This enumeration will grow with the number of devices
+      supported by the library.
+    - e.g. A host board GPIO subcircuit is could be 0, Intan RHD2132 is 1, Intan
+      RHD2164 is 2, etc.
+
+2. `slot` [RO]: The index of the physical interface that this device uses for host
+   communication
+    - e.g. the PCIe slot index
+    - e.g. the USB port index
+    - Typically, host hardware will be assigned an index in non-volatile memory
+      or via dip switch configuration.
+
+2. `clock_dom` [RO]: The clock domain that the device is sychronized to.
+    - All devices exist in a single clock domain
+    - There are one or more clock domains per device_map
+
+3. `clock_hz` [RO]: The clock rate in Hz of the clock governing `clock_dom`
+
+4. `read_active` [RW]: If not 0, the Device will use the data input channel if read_size > 0 and it
+  has valid data.
+    - This value can be changed  to prevent the device from using data
+      input channel resources
+    - It is a device-specific data gate that is independent of `read_size` and
+      `num_reads`
+
+4. `read_size` [RO]: Number of bytes of data transmitted by this device during a
+    single read.
+    - 0 indicates that it does not send data.
+
+5. `num_reads` [RO]: Number of reads required to construct a full device read sample
+   (e.g., number of columns when `read_size` corresponds to a single row of
+   pixels from a camera sensor)
+
+6. `write_size` [RO]: Number of bytes accepted by the device during a single write
+    - 0 indicates that it does not send data.
+
+7. `num_writes` [RO]: Number of writes required to construct a full device output
+   sample.
+
+## Frame
+A _frame_ is a flat byte array containing a single sample's worth of data for a
+set (one to all) of devices within a device map. Data within frames is arranged
+into three memory sectors as follows:
+
+```
+[32 byte header,                              // 1. Header
+ dev_0 idx, dev_1 idx, ... , dev_n idx,       // 2. Device map indices
+ dev_0 data, dev_1 data, ... , dev_n data]    // 3. Data
+
+```
+Each frame memory sector is described below:
+
+1. Header
+    - Each frame starts with a 32-byte header
+    - For reading (firmware to host) operations, the header contains
+        - bytes 0-7: unsigned 64-bit integer holding system clock counter
+        - bytes 8-9: unsigned 16-bit integer indicating number of devices that
+          the frame contains data for
+        - byte 10: 8-bit integer specifying fame error state. frame error. 0 =
+          OK. 1 = data may be corrupt.
+        - bytes 11-32: reserved
+
+    - For writing (host to firmware) operations , the header contains
+        - bytes 0-32: reserved
+
+2. Device map indices
+    - An array of unsigned 32-bit keys corresponding the device map captured by
+      the host during _context_ initialization
+    - The offset, size, and type information of the _i_th data block within the
+      `data` section of each frame is determined by examining the _i_th member
+      of the device map.
+
+3. Data
+    - Raw data blocks from each device in the device map.
+    - The ordering of device-specific blocks is the same as the device index
+      within the _device map index_ portion of the frame
+    - The read/write size for each device-specific block is provided in the
+      device map
+    - If timing informaiton is passed in the data block, it should be specified
+      how to interpret it (using plain text).
+
+# Example Headstage Serialization Protocol {#ser-protocol}
+TODO: Link
+
+\newpage
+# Example Open Ephys ONI-compliant API: `liboni`  {#api-imp }
+TODO: Link
+
+\newpage
+# Notes for version 0.4
+
+1. Support for multiple data input and output channels
+    - The input or output channel used by a device should be part of its descriptor
+    - The `slot` member was added for this, but its functionality needs to be tested
+2. Add device silencing to _context_ options
+    - User should be able to shut off particular devices to prevent them from
+      using the input channel
+    - This can be accomplished via very similar logic to RUNNING -- it will
+      interact wwith the data input controller at the same points, but in a
+      device-specific manner.
+3. Add a read-only global register with hardware revision version and firmware
+version. Or, when we get reconfiguration working, static firmware version and
+loaded firmware version. This is especially important for reconfiguration, as
+we might need different bitfiles for different versions in the future. In any
+case having information and a way of knowing which board is being used never
+hurts.
+4. The whole concept of "official" device IDs might be beyond the intended
+scope of this spec. Instead, maybe devices should only berequired to report
+frame read/write sizes in device map. Having official IDs can be an
+implementation choice. I've moved the wording I'm referring to to here:
+
+- Device IDs up to 9999 are reserved. Device ID 10000 and greater are free
+  to use for custom hardware projects.
+- The use of device IDs less than 10000 not specified within this
+  enumeration will result in OE_EDEVID errors.
+- Device numbers greater than 9999 are allowed for general purpose use and
+  will not be verified by the API.
+- Incorporation into the official device enum (device IDs < 10000) can be
+  achieved via pull-request to the ONI repository.

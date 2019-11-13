@@ -36,15 +36,21 @@ following components:
 1. Host device driver specification [WIP]
 1. Host programming interface specification
 
-Each can be found as a separate section in the specification itself.
+Each can be found as a separate section in the specification itself. 
+
+## Contributing
+[oni-spec-wip.txt](oni-spec-wip.txt) is the _unstable_ work in
+progress for the next ONI revision. Please make changes and PRs to this
+document only. This repo shall not contain a PDF version of this WIP spec.
 
 ## Implementations
 
 ### Open Ephys 2.0
 In addition to these specifications, we have created the following flagship
-implementations which form data acquisition system at the base of our [next
-generation headstages](../headstage-64). These implementations are modular --
-you can use them for your project. There is no need to reinvent the wheel:
+implementations which form the basis of our [next generation acquisition
+system](https://jonnew.github.io/open-ephys-pcie/). These implementations are
+modular -- you can use them for your project. There is no need to reinvent the
+wheel:
 
 - Firmware implementations based on (1,2).
     - TODO
@@ -53,10 +59,10 @@ you can use them for your project. There is no need to reinvent the wheel:
     - TODO
 
 - API implementations based upon (4):
-    - [liboepcie](../api/liboepcie) is an ANSI-C open-ephys++ API implementation.
+    - [liboni](../api/liboepcie) is an ANSI-C open-ephys++ API implementation.
     It contains functions for configuring and stream data to and from hardware.
-    - [cppoepcie](../api/cppoepcie) C++14 bindings for liboepcie.
-    - [clroepcie](../api/clroepcie) CLR/.NET bindings for liboepcie.
+    - [cpponi](../api/cppoepcie) C++14 bindings for liboepcie.
+    - [clroni](../api/clroepcie) CLR/.NET bindings for liboepcie.
 
 If you think these implementations are missing something, feel free to use the
 spec to develop for yourself or submit a bug report. When you use these
