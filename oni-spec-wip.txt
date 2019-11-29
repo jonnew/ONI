@@ -99,9 +99,11 @@ Following a hardware reset, the signal channel is used to provide the device
 map to the host using the following packet sequence:
 
 ```
-... | DEVICEMAPACK, uint32_t num_devices | DEVICEINST device dev_0
-    | DEVICEINST device dev_1 | ... | DEVICEINST device dev_n | ...
+... | DEVICEMAPACK, uint32_t num_devices | DEVICEINST device dev_0, uint32_t dev_0_port
+    | DEVICEINST device dev_1, uint32_t dev_1_port | ... | DEVICEINST device dev_n, uint32_t dev_n_port| ...
 ```
+Where dev_n is the numerical ID of each device and dev_n_port the physical port to which the hub containing this device is connected.
+
 
 Following a device register read or write (see [configuration
 channel](#conf-chan)), ACK or NACK signals are pushed onto the signal stream by
@@ -225,6 +227,18 @@ control over, the entire acquisition system:
 - `uint32_t sys_clock_hz`: A read-only register specifying the master (clock
   domain 0) hardware clock frequency in Hz. The clock counter in the read
   [frame](#frame) header is incremented at this frequency.
+  
+ - `uint32_t version_selected_port`: This register selects which hardware hub will the two
+	vesion registers refer to. A valie of 0 will select the host hardware, while any other
+	will select the hub connected to that port.
+	
+- `uint32_t hardware_version`: Split in two uint16_t words. The higher word is a hardware ID 
+	identifying common hubs (e.g.: an open-ephys headstage). The lower word contains the hardware
+	revision version.
+	
+- `uint32_t firmware_version`: Split in two uint16_t words. The higher word is the firmware version.
+	The second word is an optional value that, if the hardware supports online configuration, will
+	hold the version of the loaded firmware, or 0 otherwise.
 
 ## Data read channel {#data-rd-chan}
 
@@ -299,12 +313,12 @@ int api_function(context *ctx, ...);
 A _device_ is defined as configurable piece of hardware with its own register
 address space (e.g. an integrated circuit) or something programmed within the
 firmware to emulate this (e.g. an electrical stimulation sub-circuit made to
-behave like a Master-8). Host interaction with a device is facilitated using a
-device description, which holds the following elements:
+behave like a Master-8). Multiple devices can coexist on a single _hub_ that 
+is connected to the host through a single interface link. Host interaction 
+with a device is facilitated using a device description, which holds the following elements:
 
 - `device_id`: Device ID number
-- `slot`: The index of the physical interface that this device uses for host
-  communication
+- `port`: The index of the port the hub containing this device is connected to
 - `clock_dom`: Device clock domain (0 is master, 1 or greater are slaves
   synchronized to master)
 - `clock_hz`: Clock rate in Hz of clock governing `clock_dom`
@@ -332,12 +346,8 @@ instance is as follows:
     - e.g. A host board GPIO subcircuit is could be 0, Intan RHD2132 is 1, Intan
       RHD2164 is 2, etc.
 
-2. `slot` [RO]: The index of the physical interface that this device uses for host
-   communication
-    - e.g. the PCIe slot index
-    - e.g. the USB port index
-    - Typically, host hardware will be assigned an index in non-volatile memory
-      or via dip switch configuration.
+2. `port` [RO]: the port the hub containing this device is connected to
+    - The possible available ports are determined by the host hardware
 
 2. `clock_dom` [RO]: The clock domain that the device is sychronized to.
     - All devices exist in a single clock domain
