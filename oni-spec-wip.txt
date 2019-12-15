@@ -287,9 +287,7 @@ size_t oni_write(const oni_ctx ctx, size_t dev_idx, const void *data, size_t dat
 
 \newpage
 
-\newpage
-# Device Driver Specification  {#driver-protocol}
-TODO
+
 
 \newpage
 # Required API Types and Behavior {#api-spec}
@@ -424,6 +422,264 @@ TODO: Link
 \newpage
 # Example Open Ephys ONI-compliant API: `liboni`  {#api-imp }
 TODO: Link
+
+\newpage
+# Device Drivers for libONI {#driver-protocol}
+Drivers implements low level read and write operations to communicate with specific hardware using the [ONI specification](#comm-protocol), which defines which streams, configuration registers and communication protocol any ONI-compatible hardware must expose.
+To be able to be used by libONI they need to:
+- Implement all the functions featured in `onidriver.h`
+- Be built into a dynamic library named onidriver-\<drivername\>.\<ext\> where _drivername_ is the unique driver name and _ext_ the dynamic library extension for the operating system.
+- The built driver needs to be placed in a location accessible to the sytem linker. Usually next to the libONI library.
+
+Most driver functions receive a `oni_driver_ctx` parameter. It is a generic pointer to the custom structure that the driver must implement to store all the internal states of a single device context.
+## Types
+
+### `oe_driver_ctx`
+This type is a generic pointer to a custom structure containing all necessary parameters and status variables for the driver to work. The particular implementation of such structure is left to the driver.
+
+### `oni_read_stream_t`
+Avilable read-only streams as defined by the ONI specification.
+
+```{.c}
+typedef enum {
+	ONI_READ_STREAM_DATA,
+	ONI_READ_STREAM_SIGNAL  
+} oni_read_stream_t;
+```
+Currently only the [data](#data-rd-chan) and [signal](#sig-chan) streams are defined by the specification.
+
+### `oni_write_stream_t`
+Available write-only streams as defined by the ONI specification
+```{.c}
+typedef enum {
+	ONI_WRITE_STREAM_DATA
+} oni_write_stream_t;
+```
+
+At the moment, only a single [data](#data-wr-chan) stream is defined by the specification.
+
+### `oni_config_t`
+Available [configuration channel registers](#conf-chan) as defined by the ONI specification
+
+```{.c}
+typedef enum {
+    ONI_CONFIG_DEVICE_IDX,
+    ONI_CONFIG_REG_ADDR,
+    ONI_CONFIG_REG_VALUE,
+    ONI_CONFIG_RW,
+    ONI_CONFIG_TRIG,
+    ONI_CONFIG_RUNNING,
+    ONI_CONFIG_RESET,
+    ONI_CONFIG_SYSCLK
+} oni_config_t;
+```
+
+The actual implementation of those registers is left to the driver. All of them must be implemented, following the exact behavior described in the specification.
+
+## Functions
+Drivers must implement all functions defined in `onidriver.h` and follow their expected behavior.
+
+## `oni_driver_create_ctx`
+
+Creates the driver specific hardware context. 
+
+``` {.c}
+oni_driver_ctx oni_driver_create_ctx()
+```
+### Returns `oe_driver_ctx`
+A driver-specific context, or NULL if there was an error.
+
+### Description
+This function must allocate a structure with all the required parameters and status variables for driver use. This structure is passed to the main lib as a generic driver context pointer. If the context has public parameters, those can be set or read via the libONI functions `oni_set_driver_opt` and `oni_get_driver_opt` which, in turn, will call the appropriate driver functions.
+
+## `oni_driver_destroy_ctx`
+Terminate a driver context and free bound resources
+``` {.c}
+int oni_driver_destroy_ctx(oni_driver_ctx driver_ctx)
+```
+
+### Arguments
+- `driver_ctx` driver context
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t`
+
+### Description
+This function must free the memory used by the driver context as well as any allocated resources.
+
+## `oni_driver_init`
+Initialize a driver and open the device
+
+```{.c}
+int oni_driver_init(oni_driver_ctx driver_ctx, int device_index)
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `device_index` 0-based index of the host device to be opened. -1 for automatic selection.
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t`
+
+### Description
+Opens a host device and prepares the driver for IO operations. Multiple devices of the same hardware type, managed by the same driver, can be addressed bt the `device_index` argument. A value of -1 indicates that the driver should automatically select the first available device.
+
+## `oni_driver_read_stream`
+Reads data from a ONI read-only stream
+
+```{.c}
+int oni_driver_read_stream(oni_driver_ctx driver_ctx, oni_read_stream_t stream, void* data, size_t size)
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `stream` ONI stream to read
+- `data` buffer to store read data
+- `size` amount of bytes to read
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t`
+
+### Description
+Reads from one of the read-only streams definded by the ONI standard, implemented by the hardware. The specifics on how this read is made are left to the individual driver, as long as the call is blocking and on return the `data` buffer is filled with exactly `size` bytes or an error is issued.
+
+
+## `oni_driver_write_stream`
+Writes to a ONI write-only stream
+
+```{.c}
+int oni_driver_write_stream(oni_driver_ctx driver_ctx, oni_write_stream_t stream, const char* data, size_t size);
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `stream` ONI stream to write
+- `data` buffer storing data to write
+- `size` amount of bytes to write
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t
+
+### Description
+Writes to a write-only stream defined by the ONI standard, implemented by the hardware. The specifics on how this write is made are left to the individual driver, as long as the call is blocking and on return exasctly `size` bytes have been writen to the stream from the `data` buffer or an error is issued. 
+
+## `oni_driver_read_config`
+Reads a configuration register
+
+```{.c}
+int oni_driver_read_config(oni_driver_ctx driver_ctx, oni_config_t config, oni_reg_val_t* value)
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `config` configuration channel register to read
+- `value` pointer to the variable that will hold the result
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t
+
+### Description
+Reads from one of the [configuration channel registers](#conf-chan) implemented by the hardware, returning its current value.
+
+## `oni_driver_write_config`
+Reads a configuration register
+
+```{.c}
+int oni_driver_write_config(oni_driver_ctx driver_ctx, oni_config_t config, oni_reg_val_t value)
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `config` configuration channel register to write
+- `value` value to write in the register
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t
+
+### Description
+Writes to one of the [configuration channel registers](#conf-chan) implemented by the hardware.
+
+## `oni_driver_set_opt`
+Sets a driver specific context option
+
+```{.c}
+int oni_driver_set_opt(oni_driver_ctx driver_ctx, int driver_option, const void* value, size_t option_len)
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `driver_option` driver option to be written
+- `value` value to be written to the selected option
+- `option_len` length of `value` in bytes
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t
+
+### Description
+Sets a low-level driver option. This function can be called from the user application through libONI's `oni_set_driver_opt`. The possible options and their meanings are left to the individual drivers.
+
+## `oni_driver_get_opt`
+Gets a driver specific context option
+
+```{.c}
+int oni_driver_get_opt(oni_driver_ctx driver_ctx, int driver_option, void* value, size_t* option_len)
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `driver_option` driver option to be read
+- `value` buffer to store value of `option`
+- `option_len` pointer to the size of `value`(including terminating null character, if applicable) in bytes
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t
+
+### Description
+Reads a low-level driver option. This function can be called from the user application through libONI's `oni_get_driver_opt`. The possible options and their meanings are left to the individual drivers.
+
+## `oni_driver_set_opt_callback`
+Callback for API option set
+
+```{.c}
+int oni_driver_set_opt_callback(oni_driver_ctx driver_ctx, int oni_option, const void* value, size_t option_len)
+```
+
+### Arguments
+- `driver_ctx` driver context
+- `option` main API option written
+- `value` value that was written to the selected option
+- `option_len` length of `value` in bytes
+
+### Returns `int`
+- 0: Success
+- Less than 0: `oe_error_t
+
+### Description
+This function is called by the API when a global context option is set. Calling this function is the last task libOBI's `oni_set_opt`, returning its return value to the calling user application.
+
+Its intended use is for the driver to react, if needed, to any global option change. 
+
+## `driver_get_id`
+Returns the driver identification string
+
+```{.c}
+const char* oni_driver_get_id()
+```
+
+### Returns `const char*`
+A string containing the driver name
+
+### Description
+Returns a string containing the driver name. This name must be the same as the one in the filename of the driver library.
+
 
 \newpage
 # Notes for version 0.4
