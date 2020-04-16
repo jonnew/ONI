@@ -13,7 +13,7 @@ using disparate hardware in the same rig)  as well as closed-loop performance
 To address this, we have created the Open Neuro Interface (ONI) which is a set
 of __general purpose__ communication protocols, device driver specifications,
 and programming interfaces to support __arbitrary mixtures of hardware__. These
-designs are formally described by the [ONI Specificaiton](spec.pdf), which was
+designs are formally described by the [ONI Specificaiton](oni-spec.pdf), which was
 developed with lots of community input.
 
 The hope is that this acquisition system will get the boring part out of the
@@ -28,7 +28,7 @@ proceed. If you prefer a private conversation, please contact us via [Open
 Ephys](http://www.open-ephys.org/contact/).
 
 ## Contents
-The [ONI Specificaiton](spec.pdf) formally defines the requirements of the
+The [ONI Specificaiton](oni-spec.pdf) formally defines the requirements of the
 following components:
 
 1. Headstage to host serialization protocol specification [WIP]
@@ -41,7 +41,7 @@ Each can be found as a separate section in the specification itself.
 ## Contributing
 [oni-spec-wip.txt](oni-spec-wip.txt) is the _unstable_ work in
 progress for the next ONI revision. Please make changes and PRs to this
-document only. This repo shall not contain a PDF version of this WIP spec.
+document only.
 
 ## Implementations
 
@@ -59,10 +59,10 @@ wheel:
     - TODO
 
 - API implementations based upon (4):
-    - [liboni](../api/liboepcie) is an ANSI-C open-ephys++ API implementation.
+    - [liboni](https://github.com/jonnew/open-ephys-pcie/tree/master/api/liboni) is an ANSI-C open-ephys++ API implementation.
     It contains functions for configuring and stream data to and from hardware.
-    - [cpponi](../api/cppoepcie) C++14 bindings for liboepcie.
-    - [clroni](../api/clroepcie) CLR/.NET bindings for liboepcie.
+    - [cpponi](https://github.com/jonnew/open-ephys-pcie/tree/master/api/cpponi) C++14 bindings for liboepcie.
+    - [clroni](https://github.com/jonnew/open-ephys-pcie/tree/master/api/clroni) CLR/.NET bindings for liboepcie.
 
 If you think these implementations are missing something, feel free to use the
 spec to develop for yourself or submit a bug report. When you use these
