@@ -61,8 +61,8 @@ wheel:
 - API implementations based upon (4):
     - [liboni](https://github.com/jonnew/open-ephys-pcie/tree/master/api/liboni) is an ANSI-C open-ephys++ API implementation.
     It contains functions for configuring and stream data to and from hardware.
-    - [cpponi](https://github.com/jonnew/open-ephys-pcie/tree/master/api/cpponi) C++14 bindings for liboepcie.
-    - [clroni](https://github.com/jonnew/open-ephys-pcie/tree/master/api/clroni) CLR/.NET bindings for liboepcie.
+    - [cpponi](https://github.com/jonnew/open-ephys-pcie/tree/master/api/cpponi) C++14 bindings for liboni.
+    - [clroni](https://github.com/jonnew/open-ephys-pcie/tree/master/api/clroni) CLR/.NET bindings for liboni.
 
 If you think these implementations are missing something, feel free to use the
 spec to develop for yourself or submit a bug report. When you use these
