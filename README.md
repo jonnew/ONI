@@ -32,7 +32,7 @@ components:
 1. Open Neuro Interface API and Driver Translation Specification (oni-api-spec.txt)
 
 These documents can be converted a variety of other formats using
-[Pandoc](www.pandoc.org). The included Makefile can be used to convert them to
+[Pandoc](https://pandoc.org). The included Makefile can be used to convert them to
 PDF.
 
 ## Contributing
