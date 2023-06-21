@@ -1,19 +1,15 @@
-current: oni-spec.txt
-	pandoc \
-	--columns 1 \
-	--strip-comments \
-	--pdf-engine=xelatex \
-	--lua-filter=check-links.lua \
-	-o oni-spec.pdf -s oni-spec.txt
+all: hw api
 
-wip: oni-spec-wip.txt
+hw: oni-hw-spec.txt
 	pandoc \
 	--columns 1 \
 	--strip-comments \
 	--pdf-engine=xelatex \
 	--lua-filter=check-links.lua \
-	-o oni-spec-wip.pdf -s oni-spec-wip.txt
+	-o oni-hw-spec.pdf -s oni-hw-spec.txt
+
+api: hw
 
 clean:
-	rm oni-spec-wip.pdf
-	rm oni-spec.pdf
+	rm oni-hw-spec.pdf
+	rm oni-api-spec.pdf
