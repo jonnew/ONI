@@ -25,11 +25,15 @@ from you](https://open-ephys.org/contact) and talk about the best way to
 proceed.
 
 ## Contents
-The [ONI Specificaiton](oni-spec.pdf) formally defines the requirements of the
-following components:
+This specification formally defines the requirements of the following
+components:
 
-1. Open Neuro Interface Hardware Specification (oni-hw-spec.pdf)
-1. Open Neuro Interface API and Driver Translation Specification (oni-api-spec.pdf)
+1. Open Neuro Interface Hardware Specification (oni-hw-spec.txt)
+1. Open Neuro Interface API and Driver Translation Specification (oni-api-spec.txt)
+
+These documents can be converted a variety of other formats using
+[Pandoc](www.pandoc.org). The included Makefile can be used to convert them to
+PDF.
 
 ## Contributing
 The main branch contains the stable version of the specification. The unstable
