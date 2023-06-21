@@ -1,0 +1,839 @@
+---
+title: |
+    Open Neuro Interface Hardware Specification \
+    Version 1.0
+institute:
+    - Open Ephys, Inc
+author:
+    - Jonathan P. Newman^[Open Ephys, Inc, jpn@open-ephys.org]
+    - Aarón Cuevas López^[Open Ephys, Inc, aaron@open-ephys.org]
+date: \today{}
+geometry: margin=3cm
+header-includes:
+    - \usepackage{setspace}
+    - \linespread{1.2}
+    - \usepackage{lineno}
+    - \linenumbers
+colorlinks: true
+toc: true
+toc-depth: 3
+secnumdepth: 2
+abstract: |
+    This specification describes communication requirements and protocols
+    between Open Neuro Interface compliant hardware and a host computer. This
+    document is incomplete and we gratefully welcome criticisms and amendments.
+---
+
+<!--
+TODO:
+- Reset needs to be more properly explained
+- Device Datasheet needs to be defined with an example
+- "Data is sent with a [frame](#frame) format identical to the one used for read, but
+  without the *Common_Timestamp* field." Should this be _with_ the common timestamp 
+  field ignored?
+-->
+
+\newpage
+# Intentions and capabilities
+- Potential for low latency round trip times (sub-millisecond;
+  implementation-dependent)
+- Potential for high-bandwidth, bidirectional communication (thousands of
+  neural data channels)
+- Acquisition and control of arbitrary of hardware components using a single
+  communication medium
+    - Support generic mixes of data sources and sinks from multiple,
+      asynchronous pieces of hardware
+    - Generic, system-wide hardware configuration
+    - Generic, system-wide, bidirectional data streaming
+- Support multiple acquisition systems on one computer
+- Cross platform
+- Aimed at the creation of interoperable physical devices, gateware, firmware,
+  and APIs
+
+\newpage
+# Glossary of Terms {#glossary}
+Here we provide definitions of commonly used terms in this specification.
+A complete understanding of the term may require knowledge of interaction
+with other elements of the specification.
+
+1. [**Acquisition Context ("Context") **]{#context}: A top-level [API](#api)
+element that holds acquisition state, a [device table](#dev-table), and [driver
+translator](#driver-trans) state in order to communicate with exactly one
+[controller](#controller). A context is manipulated and interacted with using
+[API](#api) function calls, and ultimately affects hardware state over the [host
+interconnect](#host-intercon) via a [driver translator](#driver-trans).
+Multiple contexts can coexist on a single host system and these may each use a
+different [driver translator](#driver-trans) and/or physical interface.
+
+1. [API]{#api}: ONI compliant application programming interface. The ONI API
+specification is provided in a separate document.
+
+1. [**Controller**](#controller): Hardware with a physical interface to the
+[host computer](#host-comp) over a single [host interconnect](#host-intercon)
+using a [hardware translation driver](#driver-trans) and ONI-compliant
+[API](#api). Multiple [controllers](#host-intercon) can coexist in a single
+[host computer](#host-comp) and need not use the same [driver
+translator](#driver-trans). Controllers communicate via [API](#api) calls that
+manipulate an acquisition context](#context) and a [device table](#dev-table),
+which affect controller state using via a [driver translator](#driver-trans).
+[Hubs](#hub) are connected to the controller where data to/from their devices
+is packed and transmitted to/from the [host computer](#host-comp). The
+controller contains a global, main clock which provides a common timestamp to
+all incoming data.
+
+1. [**Device**](#device): A configurable piece of hardware with its own
+register address space (e.g. an integrated circuit) or a digital  "core" that
+emulates this.  Devices may or may not produce and/or accept streaming data.
+They must be documented, using a [device Datasheet](#dev-datasheet). Devices
+are the endpoints for most communication operations and often are the hardware
+interfacing with the physical environment.
+
+1. [**Device Datasheet **](#dev-datasheet): Documentation for a device which
+describes how it generates and accepts data, if any, along with a guide for
+programming and reading registers. This might take the form of a manufacturer
+datasheet if all chip functionality is exposed via raw register access.
+
+1. [**Device Table**](#dev-table): A collection of [device addresses](#dev-address)
+and corresponding [descriptors](#dev-desc) for all [devices](#device) governed
+by a [controller](#controller). The device table contains all meta-information
+required to for proper interaction with each device. E.g. packet read-size,
+packet write-size, burst read cycles, etc.
+
+1. [**Driver Translator **]{#driver-trans}: A device driver translation library
+that converts abstract [API](#api) calls to hardware-specific function calls
+that affect the [controller](#controller) using the [host
+interconnect](#host-intercon).
+
+1. [**Host Computer**]{#host-comp}: The computer supporting acquisition and
+processing from one or more [Controllers](#controller).
+
+1. [**Host Interconnect**]{#host-intercon}: A hardware abstraction layer
+consisting of a physical interconnect (e.g. PCIe, USB, or Ethernet) along with
+a driver translator](#driver-trans) that the [controller](#controller) uses to
+communicate with the [Host Computer](#host-comp). 
+
+1. [**Hub**](#hub): A collection of [devices](#device) that communicate with a
+[controller](#controller) over a [port interconnect](#port-intercon) and
+sharing a common clock.  All data acquired by [devices](#device) in the same
+[hub](#hub) are timestamped by this clock. Different [hubs](#hub) may be
+governed by asynchronous clocks. A [hub](#hub) may form a portion of the
+[device table](#dev-table) or the entire [device table](#dev-table) if it
+contains all the [devices](#device) within the [acquisition context](#context).
+
+1. [**Port Interconnect**]{#port-intercon}: A physical connection between a
+[hub](#hub) and a [controller](#controller). This could be an external link to
+a [hub](#hub) that is mechanically separated from the [controller](#controller)
+(e.g. a wire or wireless communication channel) or it could be a bus inside of
+the [controller](#controller) itself to a local hub.
+
+\newpage
+# Hardware Hierarchy {#ONI-hierarchy}
+
+Any ONI-compliant system is comprised, structurally, of 3 hierarchical hardware
+elements:
+
+- [**Controller**](#controller)
+    - [**Hub**](#hub)
+        - [**Device**](#device)
+
+These hardware elements are managed by a single host computer where they are
+governed by an [acquisition context](#context). The complete connectivity of
+the hardware hierarchy is shown below.
+
+```
+	Host Computer [Uses API and Driver Translator to communicate with Controller]
+	|...||
+	|   || Host Interconnect 0
+	|   ||
+	|   |+-- Controller 0 [Governed by a Context & generates a Device Table]
+	|   |    |
+	|   |    | Port Interconnect 0
+	|   |    |
+	|   |    +-- Hub 0 
+	|   |    |   |
+	|   |    |   +-- Device 0.0.0 (Host.Hub.Device)
+	|   |    |   +-- Device 0.0.1
+	|   |    |   +-- ..
+	|   |    |   +-- Device 0.0.N
+	|   |    |
+	|   |    +-- Hub 1
+	|   |    ·
+	|   |    ·
+	|   |    +-- Hub M
+	|   |
+	|   | Host Interconnect 1
+	|   |
+	|   + Controller 1
+	·
+	·
+	|
+	| Host Interconnect P
+	|
+	+--- Controller P
+```
+
+An ONI-compliant hardware system must have at least a one controller, hub, and
+device. Hubs can be independent hardware elements that communicate with the
+controller, or can share the same hardware. For instance, an FPGA can run the
+controller logic, contain a hub with local devices, and connect to external
+hubs through a digital link. Device groups operating in different clock
+domains, even if they lie in the same physical hardware, must form independent
+hubs.
+
+\newpage
+# Communication Channel Types {#com-channels}
+This standard defines two types of communication channels that will be used
+across the system:
+
+- **Stream**: A unidirectional, asynchronous channel of continuous data along
+  with a signal indicating if it is ready to send/receive data. Two directions
+  are defined:
+    - **Read**: Streams transmitting data from a device to the host computer
+    - **Write**: Streams transmitting data to a device from the host computer
+- **Registers**: A synchronous, addressed digital bus. Each address is a 32-bit
+  value and can be Read-only, Write-only or Read-Write. This channel also has
+signals to indicate a successful or failed completion of a register access
+operation.  (e.g. An access to an non-existent address or a non-allowed
+operation will return an error.)
+
+\newpage
+# Device Table {#dev-table}
+The collection of [devices](#device) governed by a [controller](#controller) is
+referred as a device table. The [controller](#controller) is responsible for
+creating this aggregate and sending it to the computer following a reset. The
+table consists of an addressed list of [device descriptors](#dev-desc). 
+
+## Device Address {#dev-address}
+Each [device descriptor](#dev-desc) entry in the device table requires a device
+address. This is is a unique, 32-bit number with the following format:
+
+```
+    Reserved(16-bit).Hub_Index(8-bit).Device_Index(8-bit)
+```
+
+- `Reserved` must be all zeros
+- `Hub_Index` provides a unique index of each [hub](#hub) within the [controller](#controller)
+- `Device_Index` is the unique index of each device within its [hub](#hub). A
+  valid `Device_Index` ranges from 0 to 0xFD. 0xFE is reserved and 0xFF
+  indicates an invalid device.
+
+\newpage
+# Devices {#device}
+Devices are the endpoint of most ONI transactions. They can represent a
+physical element interfacing with the environment (e.g. an external sensor with
+a digital communication interface), something programmed within the firmware to
+emulate this (e.g. a digital logic module on an FPGA) or a purely internal data
+source (e.g. a controller based digital logic module that generates system
+status reports). A device exposes the following [communication
+channels](#com-channels):
+
+- A MANDATORY register interface
+- An OPTIONAL read stream
+- An OPTIONAL write stream
+
+Communication over streams follows a specific [sample format](#dev-sample),
+while the register interface must comply with a specific bus communication
+cycle. These rules are described in following sections. Device developers MUST
+write a [datasheet](#dev-datasheet) describing the register map, stream data
+types and general behavior of the device in order to reach ONI-compliance.
+
+## Device ID {#dev-id}
+Different types of devices MUST have a unqiue identification integer called a
+*Device ID*.  Device IDs are 32-bit integers with the following format:
+
+```
+	Reserved(8-bit).Company(8-bit).Device(16-bit)
+```
+
+- `Reserved`: Reserved for future specification revision. Currently ignored.
+- `Company`: Any person, lab, institute, informal group, or company can
+  communicate with Open Ephys in order to to obtain a unique 8-bit "Company"
+  value, and thus be included in the automatic listings of existing ONI API
+  implementations. Open Ephys is 0x0000.
+- `Device`: 16-bit Device ID.  This number identifies not only the type of data
+  produced or consumed by a device, but also a particular implementation. For
+  instance, the same sensor will have a unique Device IDs for each digital module
+  implementation that is used to communicate with it. This number can optionally
+  be divided in two 8-bit values so long as the resulting 16-bit integer is
+  unique within a particular "Company" (there is no need for unary are monotonic
+  increments when new devices are introduced).
+
+## Device Descriptor {#dev-desc}
+A device MUST expose a descriptor that is read by the [controller](#controller)
+following a reset and is incorporated into the [device table](#dev-table). The
+descriptor must contain the following information:
+
+ ```
+     uint32    Device_ID
+     uint32    Device_Version
+     uint32    Read_Sample_Size
+     uint32    Write_Sample_Size
+ ```
+
+- `Device_ID`: [As previously described.](#dev-id)
+- `Device_Version`: A version number to  distinguish between implementations of
+  a singular, physical device. Different versions address minor issues that
+  result in no change in the device's data format. Any change that warrants a
+  modification of a device's streaming data format, read size, or write size MUST
+  be implemented as a new [Device ID](#dev-id).
+- `Read_Sample_Size`: The length in bytes of a single [device sample](#dev-sample)
+  produced by the device and sent to the [read stream](#com-channels).
+- `Write_Sample_Size`: The length in bytes that of a single [device
+  sample](#dev-sample) consumed by the device from the [write stream](#com-channels).
+
+## Device Sample Format {#dev-sample}
+Data interchanged over the read or write streams is transmitted in unit
+packets, or "samples". A sample transmitted over the read stream MUST have the
+following format:
+
+```
+    uint64    Hub_Timestamp (Read Stream Only)
+    var       Payload
+```
+
+- `Hub_Timestamp`: For samples produced by the device and set to the read
+  stream, this is a common counter for all devices in a [Hub](#hub), indicating
+  the time of sample capture. For samples consumed by the device from the write
+  stream, this value is reserved.
+- `Payload`: Device-specific data.
+    - For [read streams](#com-channels), this data must be of [Read Sample
+      Size](#dev-desc) - 8.
+    - For [write streams](#com-channels),  this data must be of [Write Sample
+      Size](#dev-desc).
+   Thus, the whole sample packet fits into the sample size specified in the
+   [device descriptor](#dev-desc).
+
+## Device Registers {#dev-register}
+
+### Register Type {#reg-type}
+Device registers can be separated into two types:
+
+- __Raw registers__: Those that correspond 1:1 to the physical register space
+  of an external electrical component.  (e.g.: The register map in the
+  manufacturer datasheet of a sensor IC)
+- __Managed registers__: Those designed to interface exclusively with an ONI
+  system, usually implemented in firmware and described in a [ONI Device
+  Datasheet](#dev-datasheet).
+
+Raw registers provide a direct window to the underlying hardware. On the other
+hand, managed registers provide flexibility and abstract control over device
+state. For instance, managed registers may provide access to abstract
+properties that require access to multiple physical registers in hardware,
+which can all be completed in a single register read or write cycle.  Thus the
+firmware can managing low-level raw access to the hardware, while exposing only
+high-level abstract registers in order to simplify the interface to user
+applications.
+
+### Register Access and Update
+Registers, independently of their [type](#reg-type), can be defined as
+Read-Write, Read-Only or Write-Only. All registers MUST have a valid value at
+power-on. Whenever a device receives a reset request generated by the
+controller, registers might either be reset to their power-on value or keep
+their current value. This can be defined independently for each register.
+
+All register writes, regardless of reset behavior, MUST be immediate (i.e.: for
+a Read-Write register, reading a register after being written must reflect the
+new value). However, the _effects_ of a register might not occur until the next
+reset. An example of this type of behavior is registers that operate on the
+[device descriptor](#dev-desc). The descriptor must be static during runtime,
+but registers affecting it might take action after a reset, providing an
+updates descriptor to the controller.
+
+Register access, bit-field definitions, reset behavior, and time of effect MUST
+be specified in the hardware datasheet for raw registers or the [ONI Device
+Datasheet](#dev-datasheet) for managed registers.
+
+### Register Map {#dev-reg-map}
+A device can optionally implement raw registers and MUST implement at least one
+managed register, `ENABLE`, a Read-Write register that takes effect after
+reset. When `ENABLE` is disabled, the device must not produce any data through
+the [read stream](#com-channels).
+
+The location of the managed registers depends on the existence of raw
+registers. If the device implements raw registers, those are mapped to
+addresses 0x0000 to 0x7FFF, corresponding to the same address map of the
+underlying hardware, and managed registers start from 0x80000. If no raw
+registers are present, managed registers start from 0x0000 instead.
+
+The `ENABLE` register MUST be the first of the managed registers, at 0x0000 if
+no raw registers are present, 0x8000 if raw registers are implemented.
+
+## Device Datasheet {#dev-datasheet}
+All ONI-compliant devices MUST have a corresponding datasheet that provides
+information on register programming and data IO. The datasheet must be served
+publicly. It can be a text file, PDF, or website. The required datasheet
+sections and information are described below.
+
+### Preamble
+The following information is required in the preamble:
+
+1. __Informal device name__: Name of the device. There are no textual
+   requirements for this field. (e.g. ChipXYX, Chip XYX, and My~Chip-12ab!, are
+   all valid)
+1. __Author(s)__: Device firmware or chip creator(s). Can be a person/people or a
+   company, group, or organization.
+1. __Device Version__: The [device version](#dev-desc) that this datasheet
+   corresponds to. 
+1. __Device ID__: The [device ID](#dev-id) that this datasheet corresponds to. 
+
+### Description
+A textual description of the functionality of the device. This can be simple or
+detailed and is meant to be useful for upstream hardware and software develops
+for understanding the nature of the device during their work.
+
+### Register Map
+
+#### Unmanaged registers
+If the device uses  [unmanaged registers](#reg-type), then a link to the device
+datasheet is all that is required. However, the register map can also be
+reproduced for clarity.
+
+#### Managed registers
+If the device uses [managed registers](#reg-type), a table that describes the
+managed register map is required. There are no formatting requirements for this
+table, but it MUST contain the following columns
+
+- __Address__: Register address within the [register map](#dev-reg-map).
+- __Name__: Human readable name for the register. Only capital ASCII letters
+  are allowed, with no spaces or special characters (e.g. VALID vs NOT_Valid).
+- __Access__: Read-only, write-only, or read-write.
+- __Time of Effect__: When does a register write affect hardware state. Immediate
+  or following reset.
+- __POR Value__: Power-on reset default value.
+- __Reset Action__: Upon a reset, what happens to the register? Does it maintain
+  its previous state or get reset to some value? If the latter, then what
+  value?
+- __Description__: Word description of the register's function
+
+Additional columns are permitted so long as their information does not conflict
+with that in the required columns.
+
+### Read Frame Format
+If the device produces frames, a
+[bitfield](https://en.wikipedia.org/wiki/Bit_field) diagram describing the
+frame structure is required. Bits can be grouped into words as is convenient.
+If no frames are produced, then a statement of such is required.
+
+### Write Frame Format
+If the device accepts frames, a
+[bitfield](https://en.wikipedia.org/wiki/Bit_field) diagram describing the
+frame structure is required. Bits can be grouped into words as is convenient.
+If no frames are accepted, then a statement of such is required.
+
+\newpage
+# Hubs {#hub}
+Hubs are collections of devices sharing a common clock. They can be independent
+hardware aggregates connected to the controller (e.g. a headstage for neural
+acquisition) or a logical partition of existing hardware (e.g. a collection of
+devices implemented in the same firmware as the controller). Hubs that exist on
+hardware that is physically separated from the [controller](#controller) are
+referred as remote hubs, while a hubs existing on the controller are local
+hubs. An ONI-compliant system MUST implement at least one local hub, located at
+[`Hub_Index 0`](#dev-address) and sharing the clock of controller's main state
+machine, and can implement up to 253 additional hubs, local or remote. All
+devices reflecting or modifying[controller](#controller) state the controller
+and/or reporting errors or similar status messages must be implemented in local
+hub 0.
+
+Every hub MUST have access high-resolution timer that is used by all its
+devices when to generate a `Hub_Timestamp` for a [data sample](#dev-sample).
+
+Data from all the devices of a hub is collected and passed to the controller.
+The specific interface between a hub and the controller is highly
+implementation-dependent and, thus, not in the scope of this document. It is
+the duty of the [port interconnect](#port-intercon) to provide the controller
+with all the device descriptors and communication channels in a transparent
+manner. It is common for a remote hub to feature a centralized IC (e.g. an
+FPGA or microcontroller) integrating the device controllers and communication
+interface to fill this duty, but other schemes are possible.
+
+Multiple hubs are differentiated through a unique identifier, or Hardware ID.
+This identifier represents a specific implementation of a hub, defined by a
+particular collection of devices on a specific hardware platform communicating
+with the controller through a specific link. Changes in the device collection,
+the communications link or the general hardware architecture require a new
+identifier.
+
+## Special Devices {#special-devs}
+There are two kinds of special devices that are required by this specification:
+An information device on each hub and a heartbeat device in local hub 0.
+
+### Information Device
+Every hub in an ONI system must feature a special device, located at
+[`Device_Address`](#dev-table) 0xFE, which supplies information about the hub.
+Because this device is required to exist at a fixed address, it is not listed
+to the device table and, thus, has no [device descriptor](#dev-desc). The only
+communication channel it must expose is the register interface, and it must not
+include any streams. The required register map is:
+
+| Address | Register                         |
+|---------|----------------------------------|
+| 0x0000  | Hardware ID                      |
+| 0x0001  | Hardware revision                |
+| 0x0002  | Firmware version                 |
+| 0x0003  | (OPTIONAL) Safe firmware version |
+| 0x0004  | Hub clock frequency              |
+| 0x0005  | Hub data latency                 |
+
+Although all register reads are 32-bits in nature, not all registers make use
+of the complete width. The detailed meaning of each register is:
+
+- **Hardware ID**: A 32-bit value that uniquely identifies the hub. It has a
+  similar format to the [Device ID](#dev-id):
+
+    ```
+	    Reserved(8-bit).Company(8-bit).Hub(16-bit)
+    ```
+
+    - `Reserved`: Reserved for future specification revision. Currently ignored.
+    - `Company`: Any person, lab, institute, informal group, or company can
+      communicate with Open Ephys in order to to obtain a unique 8-bit "Company"
+      value, and thus be included in the automatic listings of existing ONI API
+      implementations. Open Ephys is 0x0000.
+    - `Hub`: 16-bit Hub ID.  This number usually identifies a physical product
+      and would correpond to a stock keeping unit SKU) or part number in a
+      commercial setting. However, there is no formal restriction on these bits other
+      than uniqueness.
+
+- **Hardware revision**: A 16-bit value identifying changes in the
+  hardware that do not affect the overall operation of the hub and, therefore,
+  do not require a new ID. These are typically related to a PCB revision.
+- **Firmware version**: A 16-bit value specifying firmware or gateware version
+  of the main component driving the hub (e.g.: An FPGA, microcontroller, or
+  EEPROM for logic-free hubs)
+- **Safe firmware version**: (Optional) For hubs that allow online updates of
+  the firmware, 16-bit version of the fallback safe image, if any.
+- **Hub clock frequency**: 32-bit value holding the frequency, in Hz, of the
+  hub clock that drives the *Hub_Timestamp* passed to the devices.
+- **Hub data latency**: 32-bit value representing the average latency, in
+  nanoseconds, of the physical link between the hub and the controller.
+  Usually 0 in local hubs.
+
+All 16-bit versions are in the format of:
+
+```
+    Major(8-bit).Minor(8-bit).
+```
+For example, 0x0103 would imply version 1.3.  In the case of the information
+device located on hub 0, the versions refer to the physical controller hardware
+and its firmware, where that hub is located.
+
+### Heartbeat Device
+Local hub 0 must contain a "heartbeat device". This is a simple device that
+periodically produces [samples](#dev-sample) containing only the `Hub
+Timestamp` and an empty payload, at a minimum rate of 10 Hz. Its `ENABLE`
+register must be fixed and always active. This device ensures that API calls
+accessing the read stream are guaranteed to be unblocked in the case that no
+other devices in the system are producing data.
+
+\newpage
+# Controller and Host PC communication {#controller}
+The controller's purpose is to interface an ONI hardware system with the host
+computer. It aggregates and routes device data and provides transparent access
+to all devices, independently of their physical location. The host also
+contains a common clock that is used to timestamp data from all devices,
+independently of their origin hub.
+
+Communication between the controller and the host computer shall occur over
+four abstract communication channels:
+
+1. __Read__: Read-only, high-bandwidth stream of device output samples from
+   controller to host.
+1. __Write__: Write-only, high-bandwidth stream of device input samples from host
+   to controller.
+1. __Signal__: Read-only stream of short-messages and asynchronous hardware events
+   from controller to host.
+1. __Configuration__: Bidirectional, addressed access to device registers.
+
+API access to all these channels is blocking, i.e.: an API call that accesses
+any channel will not return until the requested transaction on that channel is
+complete. Concurrent access to a single channel is NOT permitted. However,
+channels are independent and concurrent access to _different_ channels MUST be
+permitted. A stream transaction is defined as a blocking read or write of a set
+number of bytes, while a register transaction is defined as a single register
+read or write cycle to an individual address.
+
+The required characteristics of these channels are described in the following
+sections. A complete understanding of their use during software development
+requires the [ONI API specification](#api).
+
+## Read Channel {#data-rd-chan}
+
+- __Word size__ : 32 bits
+- __Channel type__ : Stream
+- __Direction__ : Read
+
+The _read_ channel provides high bandwidth communication from the controller to
+the host computer. Data from the read stream of all devices that support is is
+aggregated and multiplexed by the controller and sent to the host through this
+channel.
+
+Data should be pushed to this channel as quickly as possible. It is the
+responsibility of the host computer to read data from  the stream quickly
+enough to keep up with data production by the controller. Therefore, it is
+highly recommended that an ONI system implements some kind of internal
+buffering to ameliorate the effects of uneven reading times caused by computer
+operating systems or other software limitations.
+
+### Data Frames {#frame}
+Data from the read channel is packed in frames. Each frame contains data from a
+single device [sample](#dev-sample). The frame format is:
+
+```
+    uint64  Common_Timestamp
+    uint32  Device_Address
+    uint32  Sample_Size
+    var     Sample
+```
+
+Where
+
+- `Common_Timestamp`:  A counter common to all devices generated by the
+  controller common acquisition clock. 
+- `Device_Address`: The address of the device producing the data, as featured
+  on the [device table](#dev-table). 
+- `Sample_Size`: The full size of the sample, and must be equal to the
+  `Read_Sample_Size` field of the [device descriptor](#dev-desc). 
+- `Sample`: The complete data sample as described on the [device sample
+  format](#dev-sample) section.
+
+## Write Channel {#data-wr-chan}
+
+- __Word size__ : 32 bits
+- __Channel type__ : Stream
+- __Direction__ : Write
+
+The _write_ channel provides high bandwidth communication from the host
+computer to the controller, used to send data to the devices.
+
+Data is sent with a [frame](#frame) format identical to the one used for read,
+but without the `Common_Timestamp` field. It is the responsibility of the
+controller to accept frames at any rate the computer might be sending them.
+Currently, there is no defined mechanism to inform the host of any possible
+dropped frame on the write channel, although this can be included in an
+implementation so long as it does not invalidate other any other ONI
+requirements.
+
+## Signal channel  {#sig-chan}
+
+- __Word size__ : 8 bits
+- __Channel type__ : Stream
+- __Direction__ : Read
+
+The _signal_ channel provides a way for the controller to inform the host of
+configuration results, which may be provided with a significant delay.
+Additionally, it is the channel over which the controller send the device table
+to the host following a system reset. Signal data MUST be framed into packets using
+Consistent Overhead Byte Stuffing
+([COBS](https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing)).
+Within this scheme, packets are delimited using 0's and always have the
+following format:
+
+```
+... | PACKET_FLAG, data0, data1, ..., data_k | ...
+```
+
+where `PACKET_FLAG` is 32-bit unsigned integer with a single unique bit
+setting, ` | ` represents a packet delimiter (in this case, 0), "`,`" are for
+visual clarity and are not actually in the data stream, and `...` represents
+other packets. This stream can be read and ignored  until a desired packet is
+received. Reading this stream shall block if no data is available, which allows
+asynchronous configuration acknowledgment. Valid `PACKET_FLAG`s are:
+
+|Flag           | Value         | Description                             |
+|---------------|---------------|-----------------------------------------|
+| NULLSIG       |0x00000001     | Null signal, ignored by host            |
+| CONFIGWACK    |0x00000002     | Configuration write-acknowledgment      |
+| CONFIGWNACK   |0x00000004     | Configuration no-write-acknowledgment   |
+| CONFIGRACK    |0x00000008     | Configuration read-acknowledgment       |
+| CONFIGRNACK   |0x00000010     | Configuration no-read-acknowledgment    |
+| DEVICETABACK  |0x00000020     | Device table start acknowledgment       |
+| DEVICEINST    |0x00000040     | Device descriptor instance              |
+
+
+Following a hardware reset, the signal channel is used to provide the [device
+table](#dev-table) to the host using the following packet sequence:
+
+```
+... | DEVICETABACK, uint32 num_devices
+    | DEVICEINST, uint32 dev_addr_0, device_descriptor dev_0
+    | DEVICEINST, uint32 dev_addr_1, device_descriptor dev_1 |
+    ...
+    | DEVICEINST, uint32 dev_addr_n, device_descriptor dev_n | ...
+```
+Where `dev_addr_n` is the full address of each device as described in the
+[device table](#dev-table) section and `dev_n` is a [device
+descriptor](#dev-desc)].
+
+In addition to providing the device table following reset, the signal channel
+is also used to asynchronously acknowledge register access via the
+[configuration channel](#conf-chan). Following a device register read or write,
+an CONFIGWACK, CONFIGWNACK, CONFIGRACK, or CONFIGRNACK signal is pushed onto
+the signal stream by the controller to indicate the validity of the
+transaction. For instance, on a successful register read:
+
+```
+... | CONFIGRACK | ...
+```
+
+## Configuration Channel {#conf-chan}
+
+- __Word size__ : 32 bits
+- __Channel type__ : Register
+- __Direction__ : Read-Write
+
+The _configuration_ channel supports addressed access to a set of configuration
+registers.  There are two classes of registers handled by the configuration
+channel: the first set of registers encapsulates a generic device register
+programming interface. The remaining registers are for global controller
+control and configuration and provide access to acquisition parameters and
+state control.
+
+The interface must use 32-bit values and, at least, 24-bit addressing. The
+required register map is as follows:
+
+| Address      | Name                      | Type               |
+|--------------|---------------------------|--------------------|
+| 0x00000000   | Device Address            | Register interface |
+| 0x00000001   | Register Address          | Register interface |
+| 0x00000002   | Register Value            | Register interface |
+| 0x00000003   | Read/Write                | Register interface |
+| 0x00000004   | Trigger                   | Register interface |
+| 0x00000005   | Running                   | Global             |
+| 0x00000006   | Reset                     | Global             |
+| 0x00000007   | System Clock              | Global             |
+| 0x00000008   | Acquisition Clock         | Global             |
+| 0x00000009   | Reset acquisition counter | Global             |
+| 0x0000000A   | Hardware address          | Global             |
+
+
+### Device Register Programming Interface
+The device programming interface allows transparent access to each device's
+[register map](#dev-reg-map). It defines a general purpose bus that hides the
+specifics of any particular implementation. It is composed of the following
+configuration channel registers:
+
+- `Device Address`: The fully qualified address of a device as enumerated in
+  the [device table](#dev-table) and to which communication will be directed as
+  described below.
+
+- `Register Address`: The address of the register within the [register
+  map](#dev-reg-map) of the device located at `Device Address` that will be
+  written to or read from.
+
+- `Register Value`: Value to be written to or read from and that
+  corresponds to the register `Register Address` of device located at `Device
+  Address`.
+
+- `Read/Write`: A flag indicating if a read or write should be performed.  0
+  indicates read operation. A value > 0 indicates write operation.
+
+- `Trigger`: Set > 0 to trigger either register read or write operation
+  depending on the state of `Read/Write`. If `Read/Write` is 0, a read is
+  performed. In this case, after a successful operation, `Register Value` is
+  updated with value stored in the register at `Register Address` on the device
+  at `Device Address`. If `Read/Write` is 1, `Register Value` is written to
+  register at `Register Address` on the device at `Device Address`. The `Trigger`
+  register is always be set low by the controller following transmission even if
+  it is not successful or does not make sense given the supplied register address
+  and/or value.
+
+Appropriate values of `Register Address` and `Register Value` are
+determined by:
+
+- Looking at a device's data sheet if the device is an integrated circuit and
+  using [raw registers](#reg-type).
+- Examining the [ONI Device Datasheet](#dev-datasheet) for [managed
+  registers](#reg-type).
+
+#### Register Read Sequence
+When a host requests a device register _read_, the following following sequence
+must be performed:
+
+1. Check the value of `Trigger`.
+    - If it is 0, the procedure can proceed.
+    - Else, the hardware is busy with a previous transaction and a new one
+      cannot be issued.
+1. The target device is selected by writing its address, as featured on the
+   device map, into `Device Address` on the controller
+1. The desired register address within the device register map is written into
+   `Register Address` on the controller.
+1. The `Read/Write` register on the controller is set to 0x00.
+1. The `Trigger` register on the controller is set to 0x01,
+triggering configuration transmission.
+    1. (Controller) A register read is routed by the controller to the appropriate device.
+    1. (Controller) `Trigger` is set to 0x00 once the operation finishes.
+    1. (Controller) `CONFIGRACK` is pushed into the signal stream if the operation
+    was successful, `CONFIGRNACK` is pushed if it failed.
+1. The signal stream must be pumped until either `CONFIGRACK` or `CONFIGRNACK`
+   is received indicating that controller has either:
+    - Completed reading the specified device register and copied its value to
+      the `Register Value` register.
+    - Failed to read the register in which case the value of `Register Value`
+      contains invalid data.
+1. If operation was successful, the `Register Value` can be read
+
+#### Register Write Sequence
+When a host requests a device register _write_, the following following sequence
+must be performed:
+
+1. Check the value of `Trigger`.
+    - If it is 0, the procedure can proceed.
+    - Else, the hardware is busy with a previous transaction and a new one cannot be issued.
+1. The target device is selected by writing its address, as featured on the
+   device map, into `Device Address` on the controller
+1. The desired register address within the device register map is written into `Register Address`
+   on the controller.
+1. The `Read/Write` register on the controller is set to 0x01.
+1. The `Trigger` register on the controller is set to 0x01,
+   triggering configuration transmission.
+    1. (Controller) A register write is routed by the controller to the appropriate device.
+    1. (Controller) `Trigger` is set to 0x00 once the operation finishes.
+    1. (Controller) `CONFIGWACK` is pushed into the signal stream if the operation
+    was successful, `CONFIGWNACK` is pushed if it failed.
+1. The signal stream must be pumped until either `CONFIGWACK` or `CONFIGWNACK` is
+   received indicating that the controller has either:
+    - Successfully completed writing the specified device register
+    - Failed to write the register
+
+Following successful or unsuccessful device register read or write, the
+appropriate ACK or NACK packets _must_ be passed to the [signal
+channel](#sig-chan) by the controller. If they are not, the register read and
+write calls will block indefinitely.
+
+### Global Acquisition Registers
+The following global acquisition registers provide information about, and
+control over, the entire acquisition system:
+
+- `Running`: Set to > 0 to run the system clock and produce data. Set
+  to 0 to stop the system clock and therefore stop data flow. Results in no
+  other configuration changes.
+
+- `Reset`: Set to > 0 to trigger a hardware reset and send a fresh
+  device map to the host. Devices are reset but their manages registers might
+  remain unchanged, depending on their configuration (See the [Device registers](#dev-register)
+  section for more information). Set to 0 by the controller upon entering the reset state.
+
+- `System Clock`: A read-only register specifying the master hardware clock
+  frequency in Hz. This is the clock used by the controller to perform data
+  transmission.
+
+- `Acquisition Clock`: A read-only register specifying the system common clock
+  frequency in Hz.  This clock is used to generate an acquisition counter that
+  timestamps data from all the devices.  The `Common_Timestamp` in the read
+  [frame](#frame) header is incremented at this frequency.
+
+- `Reset acquisition counter`: This register is used to reset the counter
+  generating the `Common_Timestamp` used in the [device frames](#frame). A
+  value if 1 will reset the counter to 0 without affecting the `Running` state. A
+  value of 2 will reset the counter and, at the same time, set `Running` to 1,
+  starting data production.
+
+- `Hardware Address`: This is used for systems that allow multiple controllers
+  with a link between them to synchronize their `Common_Timestamps`. When
+  resetting the acquisition counter through the `Reset acquisition counter` on a
+  device with a `Hardware Address` of 0, this command will be sent through an
+  external link to all non-zero devices, synchronizing the counters.  Multiple
+  controller support or hardware-based timestamp synchronization through
+  dedicated links are optional features of an ONI system.
+
