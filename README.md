@@ -1,3 +1,5 @@
+# NOTE: This repository has been moved to https://github.com/open-ephys/ONI. This repo has been archived.
+
 # Open Neuro Interface Specification [WIP]
 
 When creating neural acquisition tools, we have found that proper headstage
